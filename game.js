@@ -2,10 +2,14 @@
 const OVER_TITLE = "Galing mo Mwa 💋";
 const OVER_TEXT = "You did so good! Wanna go again?";
 const FACES = ["assets/faces/face1.png", "assets/faces/face2.png", "assets/faces/face3.png"]; // faces that fall
-const ME_IMG = "assets/me.png";   // YOUR face (png later). Until it exists, the emoji below is used
-const ME_EMOJI = "😎";            // placeholder emoji for your face
-const KISSES = ["💋", "😘", "😚", "💕", "💖", "💗"]; // emojis that burst when she catches your face
-const NIGHT_EVERY = 90;           // seconds of play before day <-> night
+const ME_IMG = "assets/me.png";   // falling kiss-bonus face. Until it exists, the emoji below is used
+const ME_EMOJI = "😎";
+const PLAYER_IMG = "assets/player.png";            // YOUR character, mouth closed (replaces basket)
+const PLAYER_OPEN_IMG = "assets/player-open.png";  // mouth open (when eating)
+const YUM_FILE = "";              // optional: "assets/voice/yum.mp3". Empty = built-in Pou-style yum
+const VOICE_BAD = ["assets/voice/wrong1.mp3", "assets/voice/wrong2.mp3", "assets/voice/wrong3.mp3"]; // voice-overs for wrong catches
+const LEVELS_PER_PHASE = 5;       // day <-> night switches every 5 levels
+const KISSES = ["💋", "😘", "😚", "💕", "💖", "💗"];
 // PNG skins: put a path for any emoji, e.g. "🍩": "assets/donut.png". Empty = use the emoji
 const SKIN = { "🧺": "", "🍩": "", "☕": "", "💖": "", "🍓": "", "⏰": "", "📚": "", "🪫": "", "💔": "", "🧋": "", "🛡️": "", "⭐": "" };
 // ======================
@@ -19,7 +23,7 @@ const LABEL = { "⏰": "Alarm", "📚": "Books", "🪫": "Battery", "💔": "Hea
 const TINT = { good: "255,190,220", face: "255,190,220", boba: "255,215,170", shield: "140,230,255", bad: "185,60,125", me: "255,225,140", star: "255,240,150" };
 
 const newImg = s => { const i = new Image(); i.ok = false; i.onload = () => i.ok = true; i.src = s; return i; };
-const faceImgs = FACES.map(newImg), meImg = newImg(ME_IMG);
+const faceImgs = FACES.map(newImg), meImg = newImg(ME_IMG), playerImg = newImg(PLAYER_IMG), playerOpenImg = newImg(PLAYER_OPEN_IMG);
 const skinCache = {};
 function icon(e, x, y, s) {
   const p = SKIN[e];
@@ -27,11 +31,34 @@ function icon(e, x, y, s) {
   emoji(e, x, y, s);
 }
 
-const P = { x: W / 2, y: 550, w: 84, tx: W / 2, vx: 0, sq: 0 };
+// ---- voice files (voice-overs) ----
+const loadAudio = s => { const a = new Audio(); a.preload = "auto"; a.bad = false; a.addEventListener("error", () => a.bad = true); a.src = s; return a; };
+const voiceBad = VOICE_BAD.map(loadAudio), yumAud = YUM_FILE ? loadAudio(YUM_FILE) : null;
+let lastVoice = -1, unlocked = false;
+function playFile(a, vol = 1) {
+  if (!a || a.bad || muted) return false;
+  try { a.currentTime = 0; a.volume = vol; const p = a.play(); if (p && p.catch) p.catch(() => {}); return true; } catch (e) { return false; }
+}
+function voiceOops() {
+  const all = voiceBad.map((a, i) => i).filter(i => !voiceBad[i].bad);
+  if (!all.length) return;
+  const pool = all.filter(i => i !== lastVoice), list = pool.length ? pool : all;
+  lastVoice = list[Math.floor(Math.random() * list.length)];
+  playFile(voiceBad[lastVoice], 1);
+}
+function unlockAudio() { // iOS needs one tap to allow audio files
+  if (unlocked) return; unlocked = true;
+  [...voiceBad, yumAud].forEach(a => {
+    if (!a) return;
+    try { a.muted = true; const p = a.play(); if (p && p.then) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; }).catch(() => { a.muted = false; }); } catch (e) { a.muted = false; }
+  });
+}
+
+const P = { x: W / 2, y: 550, w: 84, tx: W / 2, vx: 0, sq: 0, mouth: 0, hurt: 0 };
 let items = [], parts = [], pops = [], rings = [], stamps = [], shoots = [], bgH = [], bgS = [], btns = [];
 let score = 0, lives = 3, combo = 0, slow = 0, shield = 0, spawnT = 0, shake = 0, flash = 0, kflash = 0;
 let t = 0, stateT = 0, best = 0, state = "start", lvl = 1, missT = 0, muted = false, caught = 0, newBest = false;
-let playT = 0, nextSwitch = NIGHT_EVERY, night = 0, nightTarget = 0, ne = 0, meT = 8, starT = 15, cd = 3, lastCd = 4, CF = 1;
+let night = 0, nightTarget = 0, ne = 0, meT = 8, starT = 15, cd = 3, lastCd = 4, CF = 1;
 try { best = +localStorage.getItem("cdbest") || 0; muted = localStorage.getItem("cdmute") === "1"; } catch (e) {}
 
 function fit() {
@@ -81,16 +108,37 @@ function noise(d = .08, v = .1, f = 2000, ftype = "highpass", f2, delay = 0) {
     s.connect(flt); flt.connect(g); g.connect(master); s.start(n); s.stop(n + d + .02);
   } catch (e) {}
 }
+// tiny "voice": a buzzing wave shaped by two moving vowel filters (formants)
+function vowel(f0a, f0b, d, a1, b1, a2, b2, v, delay = 0) {
+  if (!ac()) return;
+  try {
+    const n = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain(), x = AC.createBiquadFilter(), y = AC.createBiquadFilter();
+    o.type = "sawtooth"; o.frequency.setValueAtTime(f0a, n); o.frequency.linearRampToValueAtTime(f0b, n + d);
+    x.type = y.type = "bandpass"; x.Q.value = y.Q.value = 5;
+    x.frequency.setValueAtTime(a1, n); x.frequency.exponentialRampToValueAtTime(b1, n + d);
+    y.frequency.setValueAtTime(a2, n); y.frequency.exponentialRampToValueAtTime(b2, n + d);
+    g.gain.setValueAtTime(.0001, n); g.gain.linearRampToValueAtTime(v, n + .02); g.gain.setValueAtTime(v, n + d * .7); g.gain.exponentialRampToValueAtTime(.0001, n + d);
+    o.connect(x); o.connect(y); x.connect(g); y.connect(g); g.connect(master);
+    o.start(n); o.stop(n + d + .03);
+  } catch (e) {}
+}
 const buzz = n => { try { navigator.vibrate && navigator.vibrate(n); } catch (e) {} };
 const PENTA = [523.3, 587.3, 659.3, 784, 880, 1046.5, 1174.7, 1318.5];
 const SFX = {
   pop(p = 1, v = .12) { noise(.05, v, 1500, "highpass"); tone(900 * p, .08, "sine", v, 300 * p); },
   good(c) {
-    SFX.pop(1 + Math.random() * .2, .1);
+    SFX.pop(1 + Math.random() * .2, .08);
     const f = PENTA[c % PENTA.length];
-    tone(f, .28, "sine", .09, undefined, .02); tone(f * 2, .2, "triangle", .035, undefined, .05);
+    tone(f, .28, "sine", .06, undefined, .3); tone(f * 2, .2, "triangle", .025, undefined, .33);
   },
-  face() { SFX.pop(1.1, .1); [784, 988, 1175, 1568].forEach((f, i) => tone(f, .18, "triangle", .07, undefined, i * .05)); },
+  yum() { // "yuh-mmm" like Pou
+    if (playFile(yumAud, .9)) return;
+    noise(.03, .09, 2500, "bandpass");
+    vowel(330, 290, .14, 380, 480, 2300, 1000, .6, .01);   // "yuh"
+    vowel(290, 230, .3, 300, 270, 900, 750, .55, .14);     // "mmm"
+    noise(.03, .06, 3200, "bandpass", undefined, .3);
+  },
+  face() { SFX.pop(1.1, .08); [784, 988, 1175, 1568].forEach((f, i) => tone(f, .18, "triangle", .05, undefined, .3 + i * .05)); },
   bad() { tone(160, .3, "sawtooth", .1, 50); tone(90, .35, "sine", .2, 40); noise(.2, .12, 900, "lowpass", 200); },
   boba() { for (let i = 0; i < 6; i++) tone(400 + i * 90, .09, "sine", .08, 700 + i * 110, i * .05); },
   shield() { [660, 880, 1100, 1320].forEach((f, i) => tone(f, .25, "triangle", .07, f * 1.02, i * .06)); },
@@ -141,6 +189,7 @@ function toggleMute() {
   muted = !muted;
   try { localStorage.setItem("cdmute", muted ? "1" : "0"); } catch (e) {}
   ac(); if (master) master.gain.value = muted ? 0 : 1;
+  if (muted) [...voiceBad, yumAud].forEach(a => { try { a && a.pause(); } catch (e) {} });
   if (!muted) SFX.pop(1, .1);
 }
 
@@ -165,10 +214,11 @@ function kiss(x, y) {
 }
 
 // ================= GAME FLOW =================
+const phaseNight = l => Math.floor((l - 1) / LEVELS_PER_PHASE) % 2 === 1;
 function reset() {
   items = []; parts = []; pops = []; rings = []; stamps = [];
   score = 0; lives = 3; combo = 0; slow = 0; shield = 0; spawnT = 0; shake = 0; flash = 0; kflash = 0;
-  lvl = 1; caught = 0; playT = 0; nextSwitch = NIGHT_EVERY; nightTarget = 0; meT = 8; starT = 15;
+  lvl = 1; caught = 0; night = 0; nightTarget = 0; meT = 8; starT = 15; P.mouth = 0; P.hurt = 0;
   state = "play"; stateT = 0; startMusic(); SFX.start();
 }
 function toMenu() { state = "start"; stateT = 0; items = []; parts = []; pops = []; rings = []; stamps = []; }
@@ -203,22 +253,23 @@ function spawn() {
 }
 
 function collect(it) {
+  if (it.kind !== "bad") P.mouth = .55; // open mouth, chomp!
   if (it.kind === "bad") {
     if (shield > 0) {
       shield = 0; burst(P.x, P.y - 20, 18, ["#7ee8ff", "#fff"]); ring(P.x, P.y - 20, "#7ee8ff", 30);
       pop(P.x, P.y - 70, "Blocked!", "#2aa5d8"); SFX.block();
     } else {
-      lives--; combo = 0; shake = .45; flash = .4;
+      lives--; combo = 0; shake = .45; flash = .4; P.hurt = .8;
       burst(it.x, it.y, 16, ["#b3124f", "#ff5c8a"]); ring(it.x, it.y, "#b3124f");
-      pop(P.x, P.y - 70, "Ouch!", "#b3124f"); SFX.bad(); buzz(120);
+      pop(P.x, P.y - 70, "Ouch!", "#b3124f"); SFX.bad(); buzz(120); voiceOops();
       if (lives <= 0) { newBest = score > best; state = "over"; stateT = 0; saveBest(); SFX.over(); }
     }
   } else if (it.kind === "boba") {
     slow = 5; burst(it.x, it.y, 16, ["#ffd1e8", "#c9a27a", "#fff"]); ring(it.x, it.y, "#c9a27a");
-    pop(P.x, P.y - 70, "Slow-mo 🧋", "#a0527c"); SFX.boba();
+    pop(P.x, P.y - 70, "Slow-mo 🧋", "#a0527c"); SFX.boba(); SFX.yum();
   } else if (it.kind === "shield") {
     shield = 8; burst(it.x, it.y, 16, ["#7ee8ff", "#fff"]); ring(it.x, it.y, "#7ee8ff");
-    pop(P.x, P.y - 70, "Shield 🛡️", "#2aa5d8"); SFX.shield();
+    pop(P.x, P.y - 70, "Shield 🛡️", "#2aa5d8"); SFX.shield(); SFX.yum();
   } else if (it.kind === "star") {
     let n = 0;
     for (const o of items) if (o !== it && o.kind === "bad" && !o.dead) { o.dead = true; n++; burst(o.x, o.y, 10, ["#ffe066", "#fff"]); ring(o.x, o.y, "#ffe066"); }
@@ -234,6 +285,8 @@ function collect(it) {
     const m = 1 + Math.floor(combo / 5), p = it.p * m;
     score += p; burst(it.x, it.y, 14, PINKS); ring(it.x, it.y, "#ff5c9a"); pop(it.x, it.y - 24, "+" + p);
     if (it.kind === "face") SFX.face(); else SFX.good(combo);
+    SFX.yum();
+    if (Math.random() < .18) pop(P.x, P.y - 100, "Yum! 😋", "#ff4f9a");
     if (combo % 5 === 0) { pop(W / 2, H * .32, "COMBO x" + m + "!", "#ff1a6e"); buzz(30); SFX.combo(); }
   }
 }
@@ -244,7 +297,7 @@ const toGame = (cx, cy) => { const r = cv.getBoundingClientRect(); return [(cx -
 const hitMute = (x, y) => (x - 28) ** 2 + (y - 118) ** 2 < 28 * 28;
 const hitPause = (x, y) => (x - 68) ** 2 + (y - 118) ** 2 < 28 * 28;
 function tap(x, y) {
-  ac();
+  ac(); unlockAudio();
   if (hitMute(x, y)) { toggleMute(); return true; }
   if (state === "play" && hitPause(x, y)) { pause(); return true; }
   if ((state === "start" || state === "over" || state === "pause") && stateT > .4)
@@ -271,7 +324,7 @@ const keys = {};
 addEventListener("keydown", e => {
   keys[e.key] = true;
   if (e.key === "p" || e.key === "P" || e.key === "Escape") { if (state === "play") pause(); else if (state === "pause") resume(); }
-  if ((e.key === " " || e.key === "Enter") && (state === "start" || state === "over") && stateT > .6) { ac(); reset(); }
+  if ((e.key === " " || e.key === "Enter") && (state === "start" || state === "over") && stateT > .6) { ac(); unlockAudio(); reset(); }
   if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
 });
 addEventListener("keyup", e => { delete keys[e.key]; });
@@ -281,16 +334,18 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) pause
 
 // ================= UPDATE =================
 function update(dt) {
-  playT += dt;
-  if (playT >= nextSwitch) {
-    nextSwitch += NIGHT_EVERY; nightTarget = 1 - nightTarget;
-    if (nightTarget) { pop(W / 2, H * .3, "🌙 Night falls", "#5b2a9e"); SFX.night(); }
-    else { pop(W / 2, H * .3, "☀️ Good morning", "#ff1a6e"); SFX.day(); }
-  }
-  night += Math.sign(nightTarget - night) * Math.min(Math.abs(nightTarget - night), dt / 7); // ~7s smooth blend
+  night += Math.sign(nightTarget - night) * Math.min(Math.abs(nightTarget - night), dt / 5); // ~5s smooth blend
 
   const nl = 1 + Math.floor(score / 100), k = slow > 0 ? .45 : 1;
-  if (nl > lvl) { lvl = nl; pop(W / 2, H * .42, "Level " + lvl + "!", "#ff1a6e"); SFX.level(); }
+  if (nl > lvl) {
+    lvl = nl; pop(W / 2, H * .42, "Level " + lvl + "!", "#ff1a6e"); SFX.level();
+    const nt = phaseNight(lvl) ? 1 : 0; // day <-> night every LEVELS_PER_PHASE levels
+    if (nt !== nightTarget) {
+      nightTarget = nt;
+      if (nt) { pop(W / 2, H * .3, "🌙 Night falls", "#b58cff"); setTimeout(SFX.night, 500); }
+      else { pop(W / 2, H * .3, "☀️ Good morning", "#ff1a6e"); setTimeout(SFX.day, 500); }
+    }
+  }
   slow = Math.max(0, slow - dt); shield = Math.max(0, shield - dt); missT = Math.max(0, missT - dt);
   meT -= dt; starT -= dt;
   spawnT -= dt;
@@ -330,6 +385,7 @@ function tick(dt) {
   }
   const nx = P.x + (P.tx - P.x) * Math.min(1, dt * 18);
   P.vx = (nx - P.x) / Math.max(dt, .001); P.x = nx; P.sq = Math.max(0, P.sq - dt * 4);
+  P.mouth = Math.max(0, P.mouth - dt); P.hurt = Math.max(0, P.hurt - dt);
   shake = Math.max(0, shake - dt); flash = Math.max(0, flash - dt); kflash = Math.max(0, kflash - dt);
   for (const h of bgH) { h.y -= h.v * dt; if (h.y < -40) { h.y = H + 40; h.x = Math.random() * W; } }
   for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt; p.l -= dt / p.d; }
@@ -361,29 +417,93 @@ function wrap(s, x, y, maxW, lh, color, size = 17) {
   ctx.fillText(line, x, y);
 }
 const easeBack = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2; };
-const DAY = [[255, 217, 234], [255, 166, 204], [255, 127, 181]], NIT = [[24, 14, 62], [78, 34, 118], [150, 55, 135]];
-const mix = (a, b, k, al) => (al === undefined ? "rgb(" : "rgba(") + (a[0] + (b[0] - a[0]) * k | 0) + "," + (a[1] + (b[1] - a[1]) * k | 0) + "," + (a[2] + (b[2] - a[2]) * k | 0) + (al === undefined ? ")" : "," + al + ")");
+const lerp = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+const rgb = (c, al) => (al === undefined ? "rgb(" : "rgba(") + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + (al === undefined ? ")" : "," + al + ")");
+const mix = (a, b, k, al) => rgb(lerp(a, b, k), al);
+// sky palettes (4 stops) – day, night (dark mode) and a warm dusk tint used while blending
+const DAY = [[255, 236, 246], [255, 196, 222], [255, 150, 196], [255, 118, 175]];
+const NIT = [[10, 8, 36], [34, 16, 78], [84, 30, 112], [140, 48, 128]];
+const DUSKC = [[120, 90, 170], [255, 140, 120], [255, 170, 110], [255, 120, 140]];
+const BLOB_D = [[255, 120, 190], [190, 140, 255], [255, 190, 140]], BLOB_N = [[130, 60, 200], [60, 80, 200], [200, 60, 150]];
+
+function drawSun(x, y, R, a) {
+  ctx.save(); ctx.translate(x, y); ctx.globalAlpha = a;
+  const glow = ctx.createRadialGradient(0, 0, R * .4, 0, 0, R * 3.2);
+  glow.addColorStop(0, "rgba(255,230,120,.6)"); glow.addColorStop(1, "rgba(255,230,120,0)");
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, R * 3.2, 0, 6.3); ctx.fill();
+  // outer rays spin clockwise
+  ctx.save(); ctx.rotate(t * .7);
+  for (let i = 0; i < 12; i++) {
+    ctx.save(); ctx.rotate(i * Math.PI / 6);
+    const L = R * (i % 2 ? 1.6 : 1.95) + Math.sin(t * 3 + i) * R * .08;
+    ctx.fillStyle = i % 2 ? "#ffc83d" : "#ffad1f";
+    ctx.beginPath(); ctx.moveTo(-R * .24, -R * .92); ctx.lineTo(0, -L); ctx.lineTo(R * .24, -R * .92); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  // inner short rays spin the other way
+  ctx.save(); ctx.rotate(-t * .5);
+  for (let i = 0; i < 8; i++) {
+    ctx.save(); ctx.rotate(i * Math.PI / 4 + .2);
+    ctx.fillStyle = "rgba(255,240,150,.9)";
+    ctx.beginPath(); ctx.moveTo(-R * .16, -R * .9); ctx.lineTo(0, -R * 1.3); ctx.lineTo(R * .16, -R * .9); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  const g = ctx.createRadialGradient(-R * .3, -R * .3, R * .1, 0, 0, R);
+  g.addColorStop(0, "#fff6a8"); g.addColorStop(1, "#ffb703");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.3); ctx.fill();
+  // happy face (stays upright)
+  ctx.strokeStyle = "#b3541e"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(-R * .33, -R * .08, R * .13, 1.1 * Math.PI, 1.9 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(R * .33, -R * .08, R * .13, 1.1 * Math.PI, 1.9 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, R * .08, R * .28, .2 * Math.PI, .8 * Math.PI); ctx.stroke();
+  ctx.fillStyle = "rgba(255,110,140,.45)";
+  ctx.beginPath(); ctx.arc(-R * .55, R * .2, R * .14, 0, 6.3); ctx.fill();
+  ctx.beginPath(); ctx.arc(R * .55, R * .2, R * .14, 0, 6.3); ctx.fill();
+  ctx.restore();
+}
+function drawMoon(x, y, R, a) {
+  ctx.save(); ctx.translate(x, y + Math.sin(t) * 3); ctx.globalAlpha = a;
+  const mg = ctx.createRadialGradient(0, 0, R * .5, 0, 0, R * 3.2);
+  mg.addColorStop(0, "rgba(255,240,200,.45)"); mg.addColorStop(1, "rgba(255,240,200,0)");
+  ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(0, 0, R * 3.2, 0, 6.3); ctx.fill();
+  ctx.rotate(Math.sin(t * .5) * .1);
+  const g = ctx.createRadialGradient(-R * .3, -R * .3, R * .1, 0, 0, R);
+  g.addColorStop(0, "#fffbe6"); g.addColorStop(1, "#f3dc9a");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.3); ctx.fill();
+  ctx.fillStyle = "rgba(200,170,100,.35)";
+  [[-.4, -.45, .2], [.45, .4, .16], [.15, -.6, .1], [-.5, .5, .1]].forEach(c => { ctx.beginPath(); ctx.arc(c[0] * R, c[1] * R, c[2] * R, 0, 6.3); ctx.fill(); });
+  ctx.strokeStyle = "#a07c3c"; ctx.lineWidth = 2; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(-R * .3, -R * .02, R * .12, 1.1 * Math.PI, 1.9 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(R * .3, -R * .02, R * .12, 1.1 * Math.PI, 1.9 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, R * .12, R * .2, .2 * Math.PI, .8 * Math.PI); ctx.stroke();
+  ctx.restore();
+}
 
 function bg() {
+  const dusk = 4 * ne * (1 - ne), stops = [0, .35, .7, 1];
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, mix(DAY[0], NIT[0], ne)); g.addColorStop(.55, mix(DAY[1], NIT[1], ne)); g.addColorStop(1, mix(DAY[2], NIT[2], ne));
+  for (let i = 0; i < 4; i++) g.addColorStop(stops[i], rgb(lerp(lerp(DAY[i], NIT[i], ne), DUSKC[i], dusk * .45)));
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // soft colour blobs drifting around so the sky blends together
+  for (let i = 0; i < 3; i++) {
+    const bx = W * (.5 + .45 * Math.sin(t * .13 + i * 1.9)), by = H * (.5 + .4 * Math.cos(t * .11 + i * 2.3)), r = 240;
+    const c = lerp(BLOB_D[i], BLOB_N[i], ne), bl = ctx.createRadialGradient(bx, by, 10, bx, by, r);
+    bl.addColorStop(0, rgb(c, .38 - .08 * ne)); bl.addColorStop(1, rgb(c, 0));
+    ctx.fillStyle = bl; ctx.fillRect(bx - r, by - r, r * 2, r * 2);
+  }
   if (ne > .02) { // twinkling stars
     ctx.fillStyle = "#fff";
     for (const s of bgS) { ctx.globalAlpha = ne * (.35 + .65 * Math.abs(Math.sin(t * 1.4 + s.ph))); ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.3); ctx.fill(); }
     ctx.globalAlpha = 1;
   }
   const gx = W / 2 + Math.sin(t * .5) * 90, r = ctx.createRadialGradient(gx, H * .3, 10, gx, H * .3, 320);
-  r.addColorStop(0, "rgba(255,255,255," + (.6 - .45 * ne) + ")"); r.addColorStop(1, "rgba(255,255,255,0)");
+  r.addColorStop(0, "rgba(255,255,255," + (.5 - .38 * ne) + ")"); r.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = r; ctx.fillRect(0, 0, W, H);
-  // sun sets, moon rises
-  if (ne < .98) { ctx.globalAlpha = 1 - ne; emoji("☀️", W - 56, 150 + ne * 190, 54); }
-  if (ne > .02) {
-    const my = 150 + (1 - ne) * 190, mg = ctx.createRadialGradient(W - 56, my, 10, W - 56, my, 80);
-    mg.addColorStop(0, "rgba(255,240,200," + .4 * ne + ")"); mg.addColorStop(1, "rgba(255,240,200,0)");
-    ctx.globalAlpha = 1; ctx.fillStyle = mg; ctx.fillRect(W - 140, my - 90, 170, 180);
-    ctx.globalAlpha = ne; emoji("🌙", W - 56, my, 54);
-  }
+  // sun sets (spinning), moon rises
+  if (ne < .98) drawSun(W - 56, 150 + ne * 190, 24, 1 - ne);
+  if (ne > .02) drawMoon(W - 56, 150 + (1 - ne) * 190, 24, ne);
   ctx.globalAlpha = 1;
   for (const s of shoots) { // shooting stars
     ctx.strokeStyle = "rgba(255,255,255," + s.l + ")"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x + 40, s.y - 21); ctx.stroke();
@@ -436,14 +556,27 @@ function drawBubble(it) {
 function drawItems() { for (const it of items) drawBubble(it); }
 
 function drawPlayer() {
-  ctx.save(); ctx.translate(P.x, P.y);
-  ctx.rotate(Math.max(-.35, Math.min(.35, P.vx / 1800)));
-  const s = P.sq; ctx.scale(1 + s * .25, 1 - s * .2);
+  // mouth opens while chewing, and early when something yummy is about to land
+  const near = state === "play" && items.some(o => !o.dead && o.kind !== "bad" && o.y < P.y && P.y - o.y < 125 && Math.abs(o.x - P.x) < 62);
+  const open = P.mouth > 0 || near;
+  ctx.save(); ctx.translate(P.x, P.y + Math.sin(t * 6) * 2);
+  ctx.rotate(Math.max(-.35, Math.min(.35, P.vx / 1800)) + Math.sin(t * 38) * .14 * Math.min(1, P.hurt * 1.5));
+  const s = P.sq + (P.mouth > 0 ? Math.abs(Math.sin(t * 22)) * .12 : 0); // chomp wobble
+  ctx.scale(1 + s * .25, 1 - s * .2);
+  if (combo >= 5) { // combo aura
+    const ag = ctx.createRadialGradient(0, 0, 20, 0, 0, 72);
+    ag.addColorStop(0, "rgba(255,80,160," + (.35 + Math.sin(t * 8) * .1) + ")"); ag.addColorStop(1, "rgba(255,80,160,0)");
+    ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(0, 0, 72, 0, 6.3); ctx.fill();
+  }
   if (shield > 0) {
     ctx.strokeStyle = "rgba(126,232,255,.9)"; ctx.fillStyle = "rgba(126,232,255,.22)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(0, 0, 50 + Math.sin(t * 8) * 3, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 54 + Math.sin(t * 8) * 3, 0, 6.3); ctx.fill(); ctx.stroke();
   }
-  icon("🧺", 0, 0, 60);
+  const im = (open && playerOpenImg.ok) ? playerOpenImg : (playerImg.ok ? playerImg : null);
+  if (im) {
+    const box = 96, k = box / Math.max(im.naturalWidth, im.naturalHeight), w = im.naturalWidth * k, h = im.naturalHeight * k;
+    ctx.drawImage(im, -w / 2, -h / 2 - 8, w, h);
+  } else icon("🧺", 0, 0, 60);
   ctx.restore();
 }
 
@@ -471,10 +604,11 @@ function drawParts() {
 }
 
 function hud() {
-  ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.beginPath(); ctx.roundRect(10, 10, 150, 36, 18); ctx.fill();
-  text("⭐ " + score, 26, 35, 20, "#c2185b");
-  text("Lv " + lvl, 204, 35, 16, ne > .5 ? "#fff" : "#a0114f", "center");
-  ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.beginPath(); ctx.roundRect(W - 112, 10, 102, 36, 18); ctx.fill();
+  const pill = mix([255, 255, 255], [36, 18, 66], ne, .72), ink = mix([194, 24, 91], [255, 170, 210], ne), ink2 = mix([160, 17, 79], [255, 209, 232], ne);
+  ctx.fillStyle = pill; ctx.beginPath(); ctx.roundRect(10, 10, 150, 36, 18); ctx.fill();
+  text("⭐ " + score, 26, 35, 20, ink);
+  text("Lv " + lvl + (nightTarget ? " 🌙" : " ☀️"), 204, 35, 16, mix([160, 17, 79], [255, 255, 255], ne), "center");
+  ctx.fillStyle = pill; ctx.beginPath(); ctx.roundRect(W - 112, 10, 102, 36, 18); ctx.fill();
   for (let i = 0; i < 3; i++) {
     const beat = 1 + (i < lives ? Math.max(0, Math.sin(t * 6)) * .15 : 0);
     ctx.save(); ctx.translate(W - 90 + i * 30, 29); ctx.scale(beat, beat);
@@ -482,32 +616,40 @@ function hud() {
   }
   ctx.globalAlpha = 1;
   const pw = W - 20, pr = (score % 100) / 100; // progress to next level
-  ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.beginPath(); ctx.roundRect(10, 54, pw, 10, 5); ctx.fill();
+  ctx.fillStyle = mix([255, 255, 255], [150, 110, 190], ne, .5); ctx.beginPath(); ctx.roundRect(10, 54, pw, 10, 5); ctx.fill();
   if (pr > 0) { const g = ctx.createLinearGradient(10, 0, 10 + pw, 0); g.addColorStop(0, "#ff7ab0"); g.addColorStop(1, "#ff1a6e"); ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(10, 54, Math.max(10, pw * pr), 10, 5); ctx.fill(); }
-  const m = 1 + Math.floor(combo / 5), tc = ne > .5 ? "#ffd1e8" : "#a0114f";
-  text("Combo x" + m, 12, 86, 14, tc);
-  ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.beginPath(); ctx.roundRect(92, 76, 80, 8, 4); ctx.fill();
+  const m = 1 + Math.floor(combo / 5);
+  text("Combo x" + m, 12, 86, 14, ink2);
+  ctx.fillStyle = mix([255, 255, 255], [150, 110, 190], ne, .5); ctx.beginPath(); ctx.roundRect(92, 76, 80, 8, 4); ctx.fill();
   ctx.fillStyle = "#ff2d78"; ctx.beginPath(); ctx.roundRect(92, 76, Math.max(8, 16 * (combo % 5)), 8, 4); ctx.fill();
-  text("⚡ x" + speedMul().toFixed(1), 204, 86, 14, tc, "center");
+  text("⚡ x" + speedMul().toFixed(1), 204, 86, 14, ink2, "center");
   if (slow > 0) text("🧋 " + slow.toFixed(1) + "s", W - 12, 86, 14, ne > .5 ? "#e6c8ff" : "#6b3a8a", "right");
   if (shield > 0) text("🛡️ " + shield.toFixed(1) + "s", W - 12, 106, 14, ne > .5 ? "#a8e6ff" : "#1f7fa8", "right");
   if (state === "play") { // pause button
-    ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.beginPath(); ctx.arc(68, 118, 17, 0, 6.3); ctx.fill();
-    ctx.fillStyle = "#c2185b"; ctx.beginPath(); ctx.roundRect(61, 110, 5, 16, 2); ctx.roundRect(70, 110, 5, 16, 2); ctx.fill();
+    ctx.fillStyle = pill; ctx.beginPath(); ctx.arc(68, 118, 17, 0, 6.3); ctx.fill();
+    ctx.fillStyle = ink; ctx.beginPath(); ctx.roundRect(61, 110, 5, 16, 2); ctx.roundRect(70, 110, 5, 16, 2); ctx.fill();
   }
 }
 function muteBtn() {
-  ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.beginPath(); ctx.arc(28, 118, 17, 0, 6.3); ctx.fill();
+  ctx.fillStyle = mix([255, 255, 255], [36, 18, 66], ne, .72); ctx.beginPath(); ctx.arc(28, 118, 17, 0, 6.3); ctx.fill();
   emoji(muted ? "🔇" : "🔊", 28, 119, 18);
 }
 
-// ---- cards / menus ----
+// ---- cards / menus (they go dark at night too) ----
+let CT = {};
 function cardBegin(ch, drop) {
+  const n = ne;
+  CT = {
+    bg: mix([255, 240, 246], [38, 16, 66], n), edge: mix([255, 92, 154], [190, 80, 200], n),
+    title: mix([224, 16, 95], [255, 122, 176], n), body: mix([138, 30, 85], [240, 200, 235], n), sub: mix([160, 17, 79], [215, 160, 215], n),
+    bad: mix([192, 18, 63], [255, 111, 143], n), good: mix([31, 157, 85], [110, 224, 160], n), pw: mix([122, 63, 192], [200, 160, 255], n),
+    btn2: mix([255, 209, 232], [80, 40, 110], n), btn2t: mix([160, 17, 79], [255, 200, 230], n)
+  };
   ctx.fillStyle = "rgba(60,10,50," + .5 * Math.min(1, stateT * 3) + ")"; ctx.fillRect(0, 0, W, H);
   CF = Math.min(1, (H - 24) / ch);
   const e = Math.min(1, stateT * 3), sc = .6 + .4 * easeBack(e);
   ctx.save(); ctx.translate(W / 2, H / 2 + (drop ? (1 - e) * -90 * CF : 0)); ctx.scale(sc * CF, sc * CF); ctx.globalAlpha = e;
-  ctx.fillStyle = "#fff0f6"; ctx.strokeStyle = "#ff5c9a"; ctx.lineWidth = 5;
+  ctx.fillStyle = CT.bg; ctx.strokeStyle = CT.edge; ctx.lineWidth = 5;
   ctx.beginPath(); ctx.roundRect(-165, -ch / 2, 330, ch, 30); ctx.fill(); ctx.stroke();
 }
 function cardEnd() { ctx.restore(); ctx.globalAlpha = 1; }
@@ -515,8 +657,8 @@ function button(label, lx, ly, w, h, act, primary = true) {
   btns.push({ x: W / 2 + (lx - w / 2) * CF, y: H / 2 + (ly - h / 2) * CF, w: w * CF, h: h * CF, act });
   const bs = primary ? 1 + Math.sin(t * 5) * .05 : 1;
   ctx.save(); ctx.translate(lx, ly); ctx.scale(bs, bs);
-  ctx.fillStyle = primary ? "#ff3d87" : "#ffd1e8"; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill();
-  text(label, 0, primary ? 7 : 6, primary ? 19 : 15, primary ? "#fff" : "#a0114f", "center"); ctx.restore();
+  ctx.fillStyle = primary ? "#ff3d87" : CT.btn2; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill();
+  text(label, 0, primary ? 7 : 6, primary ? 19 : 15, primary ? "#fff" : CT.btn2t, "center"); ctx.restore();
 }
 function xBadge(x, y, R) {
   ctx.fillStyle = "#e0143c"; ctx.beginPath(); ctx.arc(x + R * .72, y - R * .72, 8, 0, 6.3); ctx.fill();
@@ -527,45 +669,45 @@ function iconRow(list, y, R, bad) {
   list.forEach((o, i) => {
     drawBubble({ x: xs[i], y, r: R, kind: o.kind, e: o.e, img: o.img, ph: i * 1.7, menu: true });
     if (bad) xBadge(xs[i], y, R);
-    text(o.lab, xs[i], y + R + 15, 11, bad ? "#c0123f" : "#8a1e55", "center");
+    text(o.lab, xs[i], y + R + 15, 11, bad ? CT.bad : CT.body, "center");
   });
 }
 
 function startCard() {
   cardBegin(500);
-  text("Catch & Dodge 💕", 0, -205, 28, "#e0105f", "center");
-  text("CATCH THESE ✓", 0, -172, 13, "#1f9d55", "center");
+  text("Catch & Dodge 💕", 0, -205, 28, CT.title, "center");
+  text("CATCH THESE ✓", 0, -172, 13, CT.good, "center");
   iconRow([{ kind: "face", e: "😊", img: faceImgs[0], lab: "+12" }, { kind: "good", e: "🍩", lab: "+5" }, { kind: "good", e: "💖", lab: "+8" }, { kind: "good", e: "🍓", lab: "+6" }], -138, 21);
-  text("DON'T CATCH THESE ✖  (-1 ❤️)", 0, -76, 13, "#c0123f", "center");
+  text("DON'T CATCH THESE ✖  (-1 ❤️)", 0, -76, 13, CT.bad, "center");
   iconRow(BAD.map(e => ({ kind: "bad", e, lab: LABEL[e] })), -42, 21, true);
-  text("POWER-UPS", 0, 22, 13, "#7a3fc0", "center");
+  text("POWER-UPS", 0, 22, 13, CT.pw, "center");
   iconRow([{ kind: "boba", e: "🧋", lab: "Slow-mo" }, { kind: "shield", e: "🛡️", lab: "Shield" }, { kind: "star", e: "⭐", lab: "Pop bad" }, { kind: "me", e: ME_EMOJI, img: meImg, lab: "Kiss +❤️" }], 56, 21);
-  wrap("Drag to move the basket. The higher your score, the faster it gets. No limit!", 0, 122, 290, 17, "#8a1e55", 13);
+  wrap("Drag to move. Open wide and eat the good stuff! The higher your score, the faster it gets. No limit!", 0, 122, 290, 17, CT.body, 13);
   button("Tap to play", 0, 190, 200, 50, reset);
-  text("Best: " + best, 0, 236, 15, "#a0114f", "center");
+  text("Best: " + best, 0, 236, 15, CT.sub, "center");
   cardEnd();
 }
 function overCard() {
   cardBegin(500, true);
   const b = 1 + Math.sin(t * 4) * .04;
-  ctx.save(); ctx.translate(0, -190); ctx.scale(b, b); text(OVER_TITLE, 0, 0, 28, "#e0105f", "center"); ctx.restore();
-  wrap(OVER_TEXT, 0, -158, 280, 18, "#8a1e55", 14);
-  text("SCORE", 0, -120, 13, "#a0114f", "center");
-  text(String(Math.round(score * Math.min(1, stateT / 1.1))), 0, -72, 48, "#e0105f", "center");
-  text(newBest ? "🏆 NEW BEST!" : "Best: " + best, 0, -40, 16, newBest ? "#d98a00" : "#a0114f", "center");
-  text("Level " + lvl + "  ·  " + caught + " caught", 0, -16, 14, "#8a1e55", "center");
-  text("REMEMBER: DON'T CATCH ✖", 0, 28, 13, "#c0123f", "center");
+  ctx.save(); ctx.translate(0, -190); ctx.scale(b, b); text(OVER_TITLE, 0, 0, 28, CT.title, "center"); ctx.restore();
+  wrap(OVER_TEXT, 0, -158, 280, 18, CT.body, 14);
+  text("SCORE", 0, -120, 13, CT.sub, "center");
+  text(String(Math.round(score * Math.min(1, stateT / 1.1))), 0, -72, 48, CT.title, "center");
+  text(newBest ? "🏆 NEW BEST!" : "Best: " + best, 0, -40, 16, newBest ? "#d98a00" : CT.sub, "center");
+  text("Level " + lvl + "  ·  " + caught + " caught", 0, -16, 14, CT.body, "center");
+  text("REMEMBER: DON'T CATCH ✖", 0, 28, 13, CT.bad, "center");
   iconRow(BAD.map(e => ({ kind: "bad", e, lab: LABEL[e] })), 64, 21, true);
-  wrap("They cost a ❤️. Catch 😎 for a kiss and a free heart!", 0, 122, 290, 17, "#8a1e55", 13);
+  wrap("They cost a ❤️. Catch 😎 for a kiss and a free heart!", 0, 122, 290, 17, CT.body, 13);
   button("Try again", 0, 187, 200, 48, reset);
   button("Menu", 0, 229, 110, 34, toMenu, false);
   cardEnd();
 }
 function pauseCard() {
   cardBegin(330);
-  text("Paused ⏸", 0, -105, 30, "#e0105f", "center");
-  text("Take your time 💕", 0, -72, 16, "#8a1e55", "center");
-  text("Score " + score + "  ·  Lv " + lvl, 0, -45, 14, "#a0114f", "center");
+  text("Paused ⏸", 0, -105, 30, CT.title, "center");
+  text("Take your time 💕", 0, -72, 16, CT.body, "center");
+  text("Score " + score + "  ·  Lv " + lvl, 0, -45, 14, CT.sub, "center");
   button("Resume", 0, 0, 200, 50, resume);
   button("Restart", 0, 62, 200, 44, reset, false);
   button("Menu", 0, 118, 200, 40, toMenu, false);
