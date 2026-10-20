@@ -58,7 +58,7 @@ const P = { x: W / 2, y: 550, w: 84, tx: W / 2, vx: 0, sq: 0, mouth: 0, hurt: 0 
 let items = [], parts = [], pops = [], rings = [], stamps = [], shoots = [], bgH = [], bgS = [], btns = [];
 let score = 0, lives = 3, combo = 0, slow = 0, shield = 0, spawnT = 0, shake = 0, flash = 0, kflash = 0;
 let t = 0, stateT = 0, best = 0, state = "start", lvl = 1, missT = 0, muted = false, caught = 0, newBest = false;
-let night = 0, nightTarget = 0, ne = 0, meT = 8, starT = 15, cd = 3, lastCd = 4, CF = 1;
+let meShow = 0, night = 0, nightTarget = 0, ne = 0, meT = 8, starT = 15, cd = 3, lastCd = 4, CF = 1;
 try { best = +localStorage.getItem("cdbest") || 0; muted = localStorage.getItem("cdmute") === "1"; } catch (e) {}
 
 function fit() {
@@ -210,14 +210,15 @@ function kiss(x, y) {
   }
   for (let i = 0; i < 6; i++) stamps.push({ x: 40 + Math.random() * (W - 80), y: H * .2 + Math.random() * H * .5, l: 1, rot: (Math.random() - .5) * .8, s: 36 + Math.random() * 26 });
   ring(x, y, "#ff4f9a", 28); ring(x, y, "#ffd1e8", 12);
-  pop(W / 2, H * .34, "MWAH! 💋", "#ff1a6e"); kflash = .5; SFX.kiss(); buzz([40, 30, 40]);
+  pop(W / 2, H * .34, "MWAH! 💋", "#ff1a6e"); kflash = .5; meShow = 1.3; SFX.kiss(); buzz([40, 30, 40]);
+  for (let i = 0; i < 16; i++) parts.push({ x: 20 + Math.random() * (W - 40), y: -10 - Math.random() * 120, vx: (Math.random() - .5) * 30, vy: 60 + Math.random() * 90, l: 1, d: 2.2, e: KISSES[i % KISSES.length], s: 18 + Math.random() * 16 });
 }
 
 // ================= GAME FLOW =================
 const phaseNight = l => Math.floor((l - 1) / LEVELS_PER_PHASE) % 2 === 1;
 function reset() {
   items = []; parts = []; pops = []; rings = []; stamps = [];
-  score = 0; lives = 3; combo = 0; slow = 0; shield = 0; spawnT = 0; shake = 0; flash = 0; kflash = 0;
+  score = 0; lives = 3; combo = 0; slow = 0; shield = 0; spawnT = 0; shake = 0; flash = 0; kflash = 0; meShow = 0;
   lvl = 1; caught = 0; night = 0; nightTarget = 0; meT = 8; starT = 15; P.mouth = 0; P.hurt = 0;
   state = "play"; stateT = 0; startMusic(); SFX.start();
 }
@@ -245,7 +246,7 @@ function spawn() {
     else if (Math.random() < .5) { it.kind = "face"; it.e = "😊"; it.p = 12; it.img = faceImgs[Math.floor(Math.random() * faceImgs.length)]; }
     else { const g = GOOD[Math.floor(Math.random() * GOOD.length)]; it.kind = "good"; it.e = g.e; it.p = g.p; }
   }
-  it.r = (it.kind === "face" || it.kind === "me") ? 34 : 30;
+  it.r = it.kind === "me" ? 38 : it.kind === "face" ? 34 : 30;
   const pr = Math.random();
   if (pr < .22) it.vx = (Math.random() < .5 ? -1 : 1) * (25 + Math.random() * 35);
   else if (pr < .36) it.zig = 40 + Math.random() * 30;
@@ -278,7 +279,7 @@ function collect(it) {
   } else if (it.kind === "me") {
     combo++; caught++;
     const p = 25 * (1 + Math.floor(combo / 5)); score += p;
-    if (lives < 3) lives++;
+    if (lives < 3) { lives++; pop(P.x, P.y - 70, "+1 ❤️", "#e0143c"); }
     kiss(it.x, it.y); pop(it.x, it.y - 24, "+" + p);
   } else {
     combo++; caught++;
@@ -386,7 +387,7 @@ function tick(dt) {
   const nx = P.x + (P.tx - P.x) * Math.min(1, dt * 18);
   P.vx = (nx - P.x) / Math.max(dt, .001); P.x = nx; P.sq = Math.max(0, P.sq - dt * 4);
   P.mouth = Math.max(0, P.mouth - dt); P.hurt = Math.max(0, P.hurt - dt);
-  shake = Math.max(0, shake - dt); flash = Math.max(0, flash - dt); kflash = Math.max(0, kflash - dt);
+  shake = Math.max(0, shake - dt); flash = Math.max(0, flash - dt); kflash = Math.max(0, kflash - dt); meShow = Math.max(0, meShow - dt);
   for (const h of bgH) { h.y -= h.v * dt; if (h.y < -40) { h.y = H + 40; h.x = Math.random() * W; } }
   for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt; p.l -= dt / p.d; }
   parts = parts.filter(p => p.l > 0);
@@ -522,6 +523,7 @@ function drawBubble(it) {
   ctx.save();
   ctx.translate(it.x + (it.menu ? 0 : Math.sin(t * 2 + it.ph) * 3), it.y);
   const wb = Math.sin(t * 5 + it.ph) * .04; ctx.scale(1 + wb, 1 - wb);
+  if (it.kind === "me") { const pu = 1 + Math.sin(t * 6) * .06; ctx.scale(pu, pu); }
   if (ne > .02) { // night glow
     const hg = ctx.createRadialGradient(0, 0, R * .6, 0, 0, R * 1.9);
     hg.addColorStop(0, "rgba(" + tn + "," + .4 * ne + ")"); hg.addColorStop(1, "rgba(" + tn + ",0)");
@@ -549,6 +551,7 @@ function drawBubble(it) {
     ctx.strokeStyle = it.kind === "me" ? "#ffb300" : "#ff2d78"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, rr + 1, 0, 6.3); ctx.stroke();
   } else icon(it.e, 0, 1, R * 1.05);
   ctx.restore();
+  if (it.kind === "me") emoji("💋", R * .72, -R * .72 + Math.sin(t * 8) * 2, 20);
   ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.beginPath(); ctx.ellipse(-R * .38, -R * .45, R * .2, R * .11, -.7, 0, 6.3); ctx.fill();
   ctx.globalAlpha = .6; ctx.beginPath(); ctx.arc(R * .4, R * .38, R * .06, 0, 6.3); ctx.fill();
   ctx.restore();
@@ -723,6 +726,20 @@ function countdown() {
   text("Get ready 💕", W / 2, H / 2 - 110, 22, "#fff", "center");
 }
 
+function drawMeShow() { // your face pops up big when you catch the kiss boost
+  if (meShow <= 0) return;
+  const k = meShow / 1.3, e = easeBack(Math.min(1, (1 - k) * 3)), R = 78 * e;
+  ctx.save(); ctx.globalAlpha = Math.min(1, k * 2.5); ctx.translate(W / 2, H * .42 - (1 - k) * 30); ctx.rotate(Math.sin(t * 9) * .06 * k);
+  const gl = ctx.createRadialGradient(0, 0, R * .6, 0, 0, R * 1.8);
+  gl.addColorStop(0, "rgba(255,200,230,.7)"); gl.addColorStop(1, "rgba(255,200,230,0)");
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, R * 1.8, 0, 6.3); ctx.fill();
+  if (meImg.ok) { ctx.save(); ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.3); ctx.clip(); ctx.drawImage(meImg, -R, -R, R * 2, R * 2); ctx.restore(); }
+  else emoji(ME_EMOJI, 0, 0, R * 1.6);
+  ctx.strokeStyle = "#ffb300"; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.3); ctx.stroke();
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, R + 5, 0, 6.3); ctx.stroke();
+  emoji("💋", R * .7, R * .7, 46 * e); emoji("💖", -R * .75, -R * .7, 34 * e);
+  ctx.restore();
+}
 function draw() {
   ctx.setTransform(SX, 0, 0, SY, 0, 0);
   ctx.save();
@@ -731,6 +748,7 @@ function draw() {
   ctx.restore();
   if (flash > 0) { ctx.fillStyle = "rgba(255,30,100," + flash * .6 + ")"; ctx.fillRect(0, 0, W, H); }
   if (kflash > 0) { ctx.fillStyle = "rgba(255,170,215," + kflash * .6 + ")"; ctx.fillRect(0, 0, W, H); }
+  drawMeShow();
   btns = [];
   if (state !== "start") hud();
   muteBtn();
