@@ -4,11 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ff9ec4">
+<link rel="manifest" href="manifest.json">
 <title>Catch & Dodge</title>
 <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <canvas id="game"></canvas>
-<script src="game.js?v=5"></script>
+<script src="game.js?v=6"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");</script>
 </body>
 </html>
