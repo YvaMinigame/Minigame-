@@ -58,6 +58,7 @@ const P = { x: W / 2, y: 550, w: 84, tx: W / 2, vx: 0, sq: 0, mouth: 0, hurt: 0 
 let items = [], parts = [], pops = [], rings = [], stamps = [], shoots = [], bgH = [], bgS = [], btns = [];
 let score = 0, lives = 3, combo = 0, slow = 0, shield = 0, spawnT = 0, shake = 0, flash = 0, kflash = 0;
 let t = 0, stateT = 0, best = 0, state = "start", lvl = 1, missT = 0, muted = false, caught = 0, newBest = false;
+let adminOK = false, cheatUsed = false; const cheat = { k: false, god: false };
 let meShow = 0, night = 0, nightTarget = 0, ne = 0, meT = 8, starT = 15, cd = 3, lastCd = 4, CF = 1;
 try { best = +localStorage.getItem("cdbest") || 0; muted = localStorage.getItem("cdmute") === "1"; } catch (e) {}
 
@@ -202,7 +203,7 @@ function burst(x, y, n, cols, sp = 170) {
 }
 const pop = (x, y, txt, c = "#ff2d78") => pops.push({ x, y, txt, c, l: 1 });
 const ring = (x, y, c, r = 22) => rings.push({ x, y, r, c, l: 1 });
-const saveBest = () => { try { if (score > best) { best = score; localStorage.setItem("cdbest", best); } } catch (e) {} };
+const saveBest = () => { try { if (score > best && !cheatUsed) { best = score; localStorage.setItem("cdbest", best); } } catch (e) {} };
 function kiss(x, y) {
   for (let i = 0; i < 22; i++) {
     const a = Math.random() * 6.283, s = 120 + Math.random() * 220;
@@ -219,7 +220,7 @@ const phaseNight = l => Math.floor((l - 1) / LEVELS_PER_PHASE) % 2 === 1;
 function reset() {
   items = []; parts = []; pops = []; rings = []; stamps = [];
   score = 0; lives = 3; combo = 0; slow = 0; shield = 0; spawnT = 0; shake = 0; flash = 0; kflash = 0; meShow = 0;
-  lvl = 1; caught = 0; night = 0; nightTarget = 0; meT = 8; starT = 15; P.mouth = 0; P.hurt = 0;
+  cheatUsed = cheat.k || cheat.god; lvl = 1; caught = 0; night = 0; nightTarget = 0; meT = 8; starT = 15; P.mouth = 0; P.hurt = 0;
   state = "play"; stateT = 0; startMusic(); SFX.start();
 }
 function toMenu() { state = "start"; stateT = 0; items = []; parts = []; pops = []; rings = []; stamps = []; }
@@ -254,16 +255,19 @@ function spawn() {
 }
 
 function collect(it) {
+  if (cheat.k && it.kind !== "bad") { score += 1000; pop(it.x, it.y - 50, "+1000 🛠", "#7a3cff"); }
   if (it.kind !== "bad") P.mouth = .55; // open mouth, chomp!
   if (it.kind === "bad") {
     if (shield > 0) {
       shield = 0; burst(P.x, P.y - 20, 18, ["#7ee8ff", "#fff"]); ring(P.x, P.y - 20, "#7ee8ff", 30);
       pop(P.x, P.y - 70, "Blocked!", "#2aa5d8"); SFX.block();
+    } else if (cheat.god) {
+      burst(it.x, it.y, 10, ["#b58cff", "#fff"]); pop(P.x, P.y - 70, "God mode 🛠", "#7a3cff"); SFX.block();
     } else {
       lives--; combo = 0; shake = .45; flash = .4; P.hurt = .8;
       burst(it.x, it.y, 16, ["#b3124f", "#ff5c8a"]); ring(it.x, it.y, "#b3124f");
       pop(P.x, P.y - 70, "Ouch!", "#b3124f"); SFX.bad(); buzz(120); voiceOops();
-      if (lives <= 0) { newBest = score > best; state = "over"; stateT = 0; saveBest(); SFX.over(); }
+      if (lives <= 0) { newBest = score > best && !cheatUsed; state = "over"; stateT = 0; saveBest(); SFX.over(); }
     }
   } else if (it.kind === "boba") {
     slow = 5; burst(it.x, it.y, 16, ["#ffd1e8", "#c9a27a", "#fff"]); ring(it.x, it.y, "#c9a27a");
@@ -301,7 +305,7 @@ function tap(x, y) {
   ac(); unlockAudio();
   if (hitMute(x, y)) { toggleMute(); return true; }
   if (state === "play" && hitPause(x, y)) { pause(); return true; }
-  if ((state === "start" || state === "over" || state === "pause") && stateT > .4)
+  if ((state === "start" || state === "over" || state === "pause" || state === "admin") && stateT > .4)
     for (const b of btns) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { SFX.click(); b.act(); return true; }
   return false;
 }
@@ -628,6 +632,7 @@ function hud() {
   text("⚡ x" + speedMul().toFixed(1), 204, 86, 14, ink2, "center");
   if (slow > 0) text("🧋 " + slow.toFixed(1) + "s", W - 12, 86, 14, ne > .5 ? "#e6c8ff" : "#6b3a8a", "right");
   if (shield > 0) text("🛡️ " + shield.toFixed(1) + "s", W - 12, 106, 14, ne > .5 ? "#a8e6ff" : "#1f7fa8", "right");
+  if (cheat.k || cheat.god) text("🛠 " + (cheat.k ? "1K " : "") + (cheat.god ? "GOD" : ""), 204, 106, 12, ink2, "center");
   if (state === "play") { // pause button
     ctx.fillStyle = pill; ctx.beginPath(); ctx.arc(68, 118, 17, 0, 6.3); ctx.fill();
     ctx.fillStyle = ink; ctx.beginPath(); ctx.roundRect(61, 110, 5, 16, 2); ctx.roundRect(70, 110, 5, 16, 2); ctx.fill();
@@ -712,8 +717,41 @@ function pauseCard() {
   text("Take your time 💕", 0, -72, 16, CT.body, "center");
   text("Score " + score + "  ·  Lv " + lvl, 0, -45, 14, CT.sub, "center");
   button("Resume", 0, 0, 200, 50, resume);
-  button("Restart", 0, 62, 200, 44, reset, false);
+  button("Restart", -52, 62, 95, 44, reset, false);
+  button("🛠 Admin", 52, 62, 95, 44, openAdmin, false);
   button("Menu", 0, 118, 200, 40, toMenu, false);
+  cardEnd();
+}
+// ---- admin / cheat panel (pause menu > Admin, password: marco) ----
+function openAdmin() {
+  if (!adminOK) {
+    const p = prompt("Admin password:");
+    if (p === null) return;
+    if (p.trim().toLowerCase() !== "marco") { alert("Wrong password"); return; }
+    adminOK = true;
+  }
+  state = "admin"; stateT = 0;
+}
+function cheatSpawn(kind) {
+  const E = { me: ME_EMOJI, star: "⭐", boba: "🧋", shield: "🛡️" };
+  items.push({ x: 60 + Math.random() * (W - 120), y: -40, vy: 150, ph: Math.random() * 6, sd: 1, kind, e: E[kind], img: kind === "me" ? meImg : undefined, r: kind === "me" ? 38 : 30 });
+  cheatUsed = true;
+}
+function adminCard() {
+  cardBegin(380);
+  text("🛠 Admin", 0, -158, 28, CT.title, "center");
+  button("1K points / bubble: " + (cheat.k ? "ON ✅" : "OFF"), 0, -116, 270, 34, () => { cheat.k = !cheat.k; cheatUsed = true; }, false);
+  button("God mode: " + (cheat.god ? "ON ✅" : "OFF"), 0, -76, 270, 34, () => { cheat.god = !cheat.god; cheatUsed = true; }, false);
+  button("+ Full ❤️", -69, -36, 128, 34, () => { lives = 3; cheatUsed = true; }, false);
+  button("Next level", 69, -36, 128, 34, () => { score = lvl * 100; cheatUsed = true; }, false);
+  button("Day / Night", 0, 4, 270, 34, () => { nightTarget = nightTarget ? 0 : 1; cheatUsed = true; }, false);
+  text("SPAWN", 0, 48, 13, CT.pw, "center");
+  button("😎", -102, 72, 60, 34, () => cheatSpawn("me"), false);
+  button("⭐", -34, 72, 60, 34, () => cheatSpawn("star"), false);
+  button("🧋", 34, 72, 60, 34, () => cheatSpawn("boba"), false);
+  button("🛡️", 102, 72, 60, 34, () => cheatSpawn("shield"), false);
+  button("Back", 0, 132, 200, 46, () => { state = "pause"; stateT = 0; });
+  text("Cheat runs don't save your best score", 0, 174, 11, CT.sub, "center", "normal");
   cardEnd();
 }
 function countdown() {
@@ -755,6 +793,7 @@ function draw() {
   if (state === "start") startCard();
   else if (state === "over") overCard();
   else if (state === "pause") pauseCard();
+  else if (state === "admin") adminCard();
   else if (state === "count") countdown();
 }
 
