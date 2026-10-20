@@ -62,13 +62,28 @@ function moveTo(cx) {
   const x = ((cx - r.left) * W) / r.width;
   player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, x));
 }
+
+// mouse (desktop)
 cv.addEventListener("pointerdown", e => {
+  if (e.pointerType !== "mouse") return;
   if (state !== "play") reset();
   else moveTo(e.clientX);
 });
 cv.addEventListener("pointermove", e => {
-  if (state === "play") moveTo(e.clientX);
+  if (e.pointerType === "mouse" && state === "play") moveTo(e.clientX);
 });
+
+// touch (phone): drag to slide
+function onTouch(e) {
+  e.preventDefault();
+  if (state !== "play") {
+    if (e.type === "touchstart") reset();
+    return;
+  }
+  moveTo(e.touches[0].clientX);
+}
+cv.addEventListener("touchstart", onTouch, { passive: false });
+cv.addEventListener("touchmove", onTouch, { passive: false });
 
 function update(dt) {
   const k = slow > 0 ? 0.5 : 1;
